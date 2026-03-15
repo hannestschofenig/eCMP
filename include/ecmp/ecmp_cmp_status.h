@@ -1,0 +1,58 @@
+#ifndef ECMP_CMP_STATUS_H
+#define ECMP_CMP_STATUS_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ECMP_CMP_BODY_IR 0
+#define ECMP_CMP_BODY_IP 1
+#define ECMP_CMP_BODY_ERROR 23
+#define ECMP_CMP_BODY_PKICONF 19
+
+#define ECMP_CMP_STATUS_ACCEPTED 0
+#define ECMP_CMP_STATUS_GRANTED_WITH_MODS 1
+#define ECMP_CMP_STATUS_REJECTION 2
+#define ECMP_CMP_STATUS_WAITING 3
+#define ECMP_CMP_STATUS_REVOCATION_WARNING 4
+#define ECMP_CMP_STATUS_REVOCATION_NOTIFICATION 5
+#define ECMP_CMP_STATUS_KEY_UPDATE_WARNING 6
+
+#define ECMP_CMP_FAILINFO_BAD_ALG (1u << 0)
+#define ECMP_CMP_FAILINFO_BAD_MESSAGE_CHECK (1u << 1)
+#define ECMP_CMP_FAILINFO_BAD_REQUEST (1u << 2)
+#define ECMP_CMP_FAILINFO_BAD_TIME (1u << 3)
+#define ECMP_CMP_FAILINFO_BAD_CERT_ID (1u << 4)
+#define ECMP_CMP_FAILINFO_BAD_DATA_FORMAT (1u << 5)
+#define ECMP_CMP_FAILINFO_WRONG_AUTHORITY (1u << 6)
+#define ECMP_CMP_FAILINFO_INCORRECT_DATA (1u << 7)
+#define ECMP_CMP_FAILINFO_MISSING_TIME_STAMP (1u << 8)
+#define ECMP_CMP_FAILINFO_BAD_POP (1u << 9)
+#define ECMP_CMP_FAILINFO_CERT_REVOKED (1u << 10)
+#define ECMP_CMP_FAILINFO_CERT_CONFIRMED (1u << 11)
+#define ECMP_CMP_FAILINFO_WRONG_INTEGRITY (1u << 12)
+#define ECMP_CMP_FAILINFO_BAD_RECIPIENT_NONCE (1u << 13)
+#define ECMP_CMP_FAILINFO_TIME_NOT_AVAILABLE (1u << 14)
+#define ECMP_CMP_FAILINFO_UNACCEPTED_POLICY (1u << 15)
+#define ECMP_CMP_FAILINFO_UNACCEPTED_EXTENSION (1u << 16)
+#define ECMP_CMP_FAILINFO_ADD_INFO_NOT_AVAILABLE (1u << 17)
+#define ECMP_CMP_FAILINFO_BAD_SENDER_NONCE (1u << 18)
+#define ECMP_CMP_FAILINFO_BAD_CERT_TEMPLATE (1u << 19)
+#define ECMP_CMP_FAILINFO_SIGNER_NOT_TRUSTED (1u << 20)
+#define ECMP_CMP_FAILINFO_TRANSACTION_ID_IN_USE (1u << 21)
+#define ECMP_CMP_FAILINFO_UNSUPPORTED_VERSION (1u << 22)
+#define ECMP_CMP_FAILINFO_NOT_AUTHORIZED (1u << 23)
+#define ECMP_CMP_FAILINFO_SYSTEM_UNAVAIL (1u << 24)
+#define ECMP_CMP_FAILINFO_SYSTEM_FAILURE (1u << 25)
+#define ECMP_CMP_FAILINFO_DUPLICATE_CERT_REQ (1u << 26)
+
+const char *ecmp_cmp_body_type_str(int body_type);
+const char *ecmp_cmp_status_str(int status);
+const char *ecmp_cmp_failinfo_bit_str(unsigned int bit);
+int ecmp_cmp_failinfo_to_string(unsigned int fail_info, char *buf, unsigned long buf_len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
