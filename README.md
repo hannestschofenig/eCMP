@@ -21,6 +21,9 @@ At the moment, the implementation focuses on a minimal but working subset:
 The main target is interoperability with the Mock CA from the
 `cmp-test-suite` repository.
 
+The code was written against `Mbed TLS 3.6.4` and the current build and test
+documentation assumes exactly that version.
+
 ## Scope
 
 This implementation is intentionally small.
@@ -103,7 +106,8 @@ example:
 
 ## Dependency on Mbed TLS
 
-`eCMP` builds against Mbed TLS and is intended to vendor it as a Git submodule.
+`eCMP` builds against `Mbed TLS 3.6.4` and is intended to vendor it as a Git
+submodule.
 
 Expected location:
 
@@ -119,17 +123,34 @@ If you are setting up the repository for the first time:
 ```bash
 git submodule add https://github.com/Mbed-TLS/mbedtls.git external/mbedtls
 git submodule update --init --recursive
+cd external/mbedtls
+git checkout mbedtls-3.6.4
+cd ../..
 ```
 
 If the submodule entry already exists, you only need:
 
 ```bash
 git submodule update --init --recursive
+cd external/mbedtls
+git checkout mbedtls-3.6.4
+cd ../..
 ```
 
-If you want to pin `eCMP` to the exact same Mbed TLS revision that was used in
-the older implementation, check out that specific commit inside
-`external/mbedtls` and commit the updated submodule pointer.
+After that, commit the updated submodule pointer in the `eCMP` repository.
+
+### Version Requirement
+
+`eCMP` was implemented and exercised with `Mbed TLS 3.6.4`.
+
+That matters for two reasons:
+
+- the code was written against the `3.6.4` public API and behavior
+- the current integration and manual test flow were verified with that version
+
+Using a different Mbed TLS release may still work, but it is not what this
+repository currently documents or tests against. If you change the Mbed TLS
+version, treat that as an explicit compatibility exercise.
 
 ### CMake Integration
 
@@ -148,6 +169,9 @@ From the `eCMP` repository root:
 
 ```bash
 git submodule update --init --recursive
+cd external/mbedtls
+git checkout mbedtls-3.6.4
+cd ../..
 cmake -S . -B build
 cmake --build build -j4
 ```
@@ -157,6 +181,9 @@ If you want to start from a fresh clone:
 ```bash
 git clone --recursive <repo-url>
 cd eCMP
+cd external/mbedtls
+git checkout mbedtls-3.6.4
+cd ../..
 cmake -S . -B build
 cmake --build build -j4
 ```
@@ -356,6 +383,8 @@ checkout of `cmp-test-suite`, typically next to this repository.
 
 The Mbed TLS dependency is now expected to be local to this repository via
 `external/mbedtls`, but the broader test environment is still workspace-based.
+
+In addition, the current code and documentation are tied to `Mbed TLS 3.6.4`.
 
 ## Recommended Next Steps
 
