@@ -92,6 +92,7 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
         return ECMP_ERR_NETWORK;
     }
 
+    /* Try all resolved addresses until a TCP connection succeeds. */
     for (cur = ai; cur != NULL; cur = cur->ai_next) {
         fd = socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
         if (fd < 0) {
@@ -124,6 +125,7 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
         return ECMP_ERR_NETWORK;
     }
 
+    /* Read the full HTTP response into a growable buffer before stripping headers. */
     for (;;) {
         unsigned char chunk[2048];
         ssize_t got = recv(fd, chunk, sizeof(chunk), 0);
@@ -174,6 +176,7 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
         raw[raw_len] = '\0';
     }
 
+    /* The CMP payload starts after the HTTP header terminator. */
     hdr_end = (const unsigned char *) strstr((const char *) raw, "\r\n\r\n");
     if (hdr_end == NULL) {
         free(raw);

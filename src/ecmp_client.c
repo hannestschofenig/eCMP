@@ -181,6 +181,7 @@ static void ecmp_copy_cmp_result_fields(ecmp_ir_result *result,
         return;
     }
 
+    /* Replace any previously copied response metadata with a fresh snapshot. */
     free(result->protection_alg_oid);
     free(result->sender_der);
     free(result->recipient_der);
@@ -209,6 +210,7 @@ static void ecmp_copy_cmp_result_fields(ecmp_ir_result *result,
     memcpy(result->cmp_status_text, state->status_text,
            sizeof(result->cmp_status_text));
 
+    /* Keep result ownership independent from the transient parser state. */
     if (ecmp_buf_dup(&tmp, state->protection_alg_oid.data,
                      state->protection_alg_oid.len) == 0) {
         result->protection_alg_oid = tmp.data;
@@ -366,6 +368,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         goto cleanup;
     }
 
+    /* Preserve parsed rejection details so callers can inspect CMP-level errors. */
     if (response_state.status != 0 && response_state.status != 1) {
         ecmp_copy_cmp_result_fields(result, &response_state);
         ret = ECMP_ERR_SERVER_REJECTED;

@@ -141,6 +141,7 @@ static int ecmp_mbedtls_name_to_der(void *ctx, const char *name,
         return ECMP_ERR_PARAM;
     }
 
+    /* Convert a DN string into the canonical DER Name representation CMP expects. */
     ret = mbedtls_x509_string_to_names(&head, name);
     if (ret != 0) {
         return ret;
@@ -206,6 +207,7 @@ static int ecmp_mbedtls_sign(void *ctx, const ecmp_key *key, ecmp_hash_alg hash_
         return ECMP_ERR_UNSUPPORTED;
     }
 
+    /* Mbed TLS sign APIs operate on the message digest, not on the raw ProtectedPart bytes. */
     ret = mbedtls_md(md_info, input, input_len, hash);
     if (ret != 0) {
         return ret;
@@ -248,6 +250,7 @@ static int ecmp_mbedtls_hash(void *ctx, ecmp_hash_alg hash_alg,
         return ECMP_ERR_UNSUPPORTED;
     }
 
+    /* Callers own the returned digest buffer and free it with libc free(). */
     out_len = mbedtls_md_get_size(md_info);
     out = calloc(1, out_len);
     if (out == NULL) {

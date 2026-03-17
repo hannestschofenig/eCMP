@@ -10,11 +10,36 @@
 #include "mbedtls/md.h"
 #include "mbedtls/oid.h"
 
+/*
+ * This file implements the minimal CMP message subset used by eCMP.
+ *
+ * The message flow follows the IR path described by RFC 9483 and RFC 9810:
+ *   ir  -> ip -> certConf -> pkiConf
+ *
+ * On the wire, this is carried in the CMP ASN.1 message container:
+ *
+ *   PKIMessage ::= SEQUENCE {
+ *       header      PKIHeader,
+ *       body        PKIBody,
+ *       protection  [0] PKIProtection OPTIONAL,
+ *       extraCerts  [1] SEQUENCE SIZE (1..MAX) OF CMPCertificate OPTIONAL
+ *   }
+ *
+ * The code below therefore has two main jobs:
+ *   1. build the DER encoding of the outgoing PKIMessage and its nested
+ *      structures such as PKIHeader, CertReqMessages, POP, and certConf
+ *   2. parse and validate the corresponding response structures
+ *
+ * Mbed TLS provides the low-level ASN.1 read/write primitives, while this file
+ * maps those primitives to the CMP-specific grammar and session rules.
+ */
+
 #define ECMP_OUTPUT_BUF_SIZE 8192
 #define ECMP_PBM_OID "\x2a\x86\x48\x86\xf6\x7d\x07\x42\x0d"
 #define ECMP_IMPLICIT_CONFIRM_OID "\x2b\x06\x01\x05\x05\x07\x04\x0d"
 #define ECMP_RFC4210_HMAC_SHA1_OID "\x2b\x06\x01\x05\x05\x08\x01\x02"
 
+/* A small cursor over a DER-encoded region used by the hand-written ASN.1 parser. */
 typedef struct ecmp_der_view {
     const unsigned char *p;
     const unsigned char *end;
@@ -153,6 +178,14 @@ static int ecmp_build_protected_part(const unsigned char *header_der, size_t hea
         return ECMP_ERR_PARAM;
     }
 
+    /*
+     * CMP protection covers PKIHeader and PKIBody wrapped as:
+     *
+     *   ProtectedPart ::= SEQUENCE { header PKIHeader, body PKIBody }
+     *
+     * The protection value is then computed over the DER encoding of that
+     * SEQUENCE, not over the full PKIMessage.
+     */
     MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_raw_buffer(&p, buf, body_der, body_len));
     MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_raw_buffer(&p, buf, header_der, header_len));
     MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_len(&p, buf, len));
@@ -202,6 +235,12 @@ static int ecmp_write_explicit_general_name(unsigned char **p, unsigned char *st
     int ret;
     size_t len = 0;
 
+    /*
+     * PKIHeader sender/recipient are GeneralName values. For this minimal
+     * implementation we only emit the directoryName alternative:
+     *
+     *   GeneralName ::= CHOICE { directoryName [4] Name, ... }
+     */
     MBEDTLS_ASN1_CHK_ADD(len,
                          mbedtls_asn1_write_raw_buffer(p, start,
                                                        name_der->data, name_der->len));
@@ -278,6 +317,17 @@ static int ecmp_write_pbm_parameters(unsigned char **p, unsigned char *start,
     int ret;
     size_t len = 0;
 
+    /*
+     * PBMParameter is used as the AlgorithmIdentifier parameters for
+     * id-PasswordBasedMac in PKIHeader.protectionAlg:
+     *
+     *   PBMParameter ::= SEQUENCE {
+     *       salt           OCTET STRING,
+     *       owf            AlgorithmIdentifier,
+     *       iterationCount INTEGER,
+     *       mac            AlgorithmIdentifier
+     *   }
+     */
     MBEDTLS_ASN1_CHK_ADD(len, ecmp_write_hmac_alg(p, start, pbm->mac));
     MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_int(p, start, pbm->iteration_count));
     MBEDTLS_ASN1_CHK_ADD(len, ecmp_write_hash_alg(p, start, pbm->owf));
@@ -303,6 +353,14 @@ static int ecmp_compute_pbm(const ecmp_crypto_provider *crypto,
     int ret;
     int iter;
 
+    /*
+     * CMP PBM derives a base key from:
+     *
+     *   secret || salt
+     *
+     * and then applies the one-way function iterationCount times before the
+     * final MAC is calculated over the ProtectedPart.
+     */
     if (crypto == NULL || pbm == NULL || secret == NULL || input == NULL ||
         mac == NULL || mac_len == NULL) {
         return ECMP_ERR_PARAM;
@@ -396,6 +454,20 @@ static int ecmp_write_pkiheader(unsigned char **p, unsigned char *start,
     size_t param_len = 0;
     (void) pbm_secret;
 
+    /*
+     * PKIHeader contains the CMP transaction context. For the currently
+     * supported flow we care in particular about:
+     *
+     *   - pvno
+     *   - sender / recipient
+     *   - messageTime [0]
+     *   - protectionAlg [1]
+     *   - senderKID [2]
+     *   - transactionID [4]
+     *   - recipNonce [5]
+     *   - senderNonce [6]
+     *   - generalInfo [8] (used here for implicitConfirm)
+     */
     if (state->implicit_confirm) {
         sub_len = 0;
         MBEDTLS_ASN1_CHK_ADD(sub_len, mbedtls_asn1_write_null(p, start));
@@ -481,6 +553,22 @@ static int ecmp_write_certrequest(unsigned char **p, unsigned char *start,
     size_t pub_len = 0;
     size_t subj_len = 0;
 
+    /*
+     * The IR body carries a CertReqMessages structure. This helper builds the
+     * nested CertRequest and its CertTemplate with the fields we currently use:
+     *
+     *   CertRequest ::= SEQUENCE {
+     *       certReqId     INTEGER,
+     *       certTemplate  CertTemplate,
+     *       controls      Controls OPTIONAL
+     *   }
+     *
+     *   CertTemplate ::= SEQUENCE {
+     *       subject       [5] Name OPTIONAL,
+     *       publicKey     [6] SubjectPublicKeyInfo OPTIONAL,
+     *       ...
+     *   }
+     */
     MBEDTLS_ASN1_CHK_ADD(pub_len, mbedtls_asn1_write_raw_buffer(p, start,
                                                                 spki_der->data + 1,
                                                                 spki_der->len - 1));
@@ -525,6 +613,13 @@ static int ecmp_write_popo(unsigned char **p, unsigned char *start,
     size_t len = 0;
     int ret;
 
+    /*
+     * For IR we send Proof-of-Possession in the signature form:
+     *
+     *   ProofOfPossession ::= CHOICE { signature [1] POPOSigningKey, ... }
+     *
+     * The signature is computed over the DER-encoded CertRequest.
+     */
     ret = crypto->sign(crypto->ctx, key, ECMP_HASH_SHA256,
                        certreq_der, certreq_der_len, &sig, &sig_len);
     if (ret != 0) {
@@ -573,6 +668,12 @@ static int ecmp_write_ir_body(unsigned char **p, unsigned char *start,
     size_t len = 0;
     int ret;
 
+    /*
+     * PKIBody uses context-specific tags to distinguish message types.
+     * Tag [0] is ir (Initialization Request), so the body becomes:
+     *
+     *   PKIBody ::= CHOICE { ir [0] CertReqMessages, ... }
+     */
     ret = ecmp_write_certrequest(&tmp_p, certreq_buf, subject_der, spki_der);
     if (ret < 0) {
         return ret;
@@ -609,6 +710,15 @@ static int ecmp_write_certconf_body(unsigned char **p, unsigned char *start,
     size_t hash_alg_len = 0;
     int ret;
 
+    /*
+     * After a successful ip response, the client confirms the received
+     * certificate with:
+     *
+     *   PKIBody ::= CHOICE { certConf [24] CertConfirmContent, ... }
+     *
+     * The hash is calculated over the enrolled certificate so the CA can match
+     * the confirmation to the certificate it issued.
+     */
     ret = crypto->hash(crypto->ctx, ECMP_HASH_SHA256,
                        state->issued_cert_der.data, state->issued_cert_der.len,
                        &cert_hash, &cert_hash_len);
@@ -650,6 +760,7 @@ static int ecmp_prepare_ir_state(const ecmp_crypto_provider *crypto,
 {
     int ret;
 
+    /* This state is reused later to validate the response transaction context. */
     state->pvno = 2;
     state->implicit_confirm = request->request_implicit_confirm;
     state->body_type = 0;
@@ -671,6 +782,7 @@ static int ecmp_prepare_ir_state(const ecmp_crypto_provider *crypto,
     if (ret != 0) {
         return ret;
     }
+    /* CMP transactionID, senderNonce, and PBM salt are generated per exchange. */
     state->transaction_id.data = calloc(1, 16);
     state->sender_nonce.data = calloc(1, 16);
     state->pbm.salt.data = calloc(1, 16);
@@ -771,6 +883,14 @@ int ecmp_cmp_build_ir(const ecmp_crypto_provider *crypto, const ecmp_key *key,
     }
     p = buf + ECMP_OUTPUT_BUF_SIZE;
 
+    /*
+     * Assemble the outgoing PKIMessage bottom-up:
+     *   1. PKIBody (ir)
+     *   2. PKIHeader
+     *   3. ProtectedPart = SEQUENCE { header, body }
+     *   4. PKIProtection [0]
+     *   5. outer PKIMessage SEQUENCE
+     */
     ret = ecmp_write_ir_body(&body_p, body_buf, crypto, key, &subject_der, &spki_der);
     if (ret < 0) {
         goto cleanup;
@@ -851,11 +971,17 @@ int ecmp_cmp_build_certconf(const ecmp_crypto_provider *crypto,
     ecmp_buf new_sender_kid = { 0 };
     int ret;
 
+    /*
+     * certConf reuses the transaction context established by ir/ip, but the
+     * sender/recipient direction is swapped because the client now answers the
+     * CA's ip message.
+     */
     if (crypto == NULL || request == NULL || state == NULL || out == NULL ||
         out_len == NULL) {
         return ECMP_ERR_PARAM;
     }
 
+    /* For certConf, the request direction is inverted relative to the previous response. */
     if (state->recipient_der.data != NULL && state->recipient_der.len > 0) {
         ret = ecmp_buf_dup(&new_sender_der, state->recipient_der.data,
                            state->recipient_der.len);
@@ -887,6 +1013,7 @@ int ecmp_cmp_build_certconf(const ecmp_crypto_provider *crypto,
         goto cleanup;
     }
 
+    /* Ownership moves from the temporary buffers into the persistent session state. */
     ecmp_buf_free(&state->sender_der);
     ecmp_buf_free(&state->recipient_der);
     ecmp_buf_free(&state->sender_kid);
@@ -1015,6 +1142,7 @@ static int ecmp_parse_algorithm_identifier(ecmp_der_view *view,
     size_t len;
     const unsigned char *param_start;
 
+    /* Reusable parser for AlgorithmIdentifier ::= SEQUENCE { algorithm, parameters OPTIONAL }. */
     if (ecmp_expect_tag(view, &len,
                         MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE) != 0) {
         return ECMP_ERR_ASN1;
@@ -1078,6 +1206,10 @@ static int ecmp_parse_directory_name(ecmp_der_view *view, ecmp_buf *name_der)
         return ECMP_ERR_PARAM;
     }
 
+    /*
+     * PKIHeader sender/recipient are GeneralName values. We currently support
+     * the directoryName alternative only and keep the embedded Name as raw DER.
+     */
     field = *view;
     if (ecmp_expect_tag(&field, &len,
                         MBEDTLS_ASN1_CONTEXT_SPECIFIC |
@@ -1085,6 +1217,7 @@ static int ecmp_parse_directory_name(ecmp_der_view *view, ecmp_buf *name_der)
         return ecmp_skip_tlv(view);
     }
 
+    /* Preserve the raw DER Name so higher layers can reuse or render it later. */
     if (ecmp_buf_dup(name_der, field.p, len) != 0) {
         return ECMP_ERR_ALLOC;
     }
@@ -1104,6 +1237,7 @@ static int ecmp_parse_pbm_params(const unsigned char *params, size_t params_len,
     int iter_count;
     int ret;
 
+    /* Mirror parser for PBMParameter as carried inside protectionAlg parameters. */
     ret = ecmp_expect_tag(&view, &len,
                           MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE);
     if (ret != 0) {
@@ -1172,6 +1306,15 @@ static int ecmp_parse_status_info(ecmp_der_view *view, int *status,
     size_t len;
     int status_value;
 
+    /*
+     * PKIStatusInfo is reused across ip and error bodies:
+     *
+     *   PKIStatusInfo ::= SEQUENCE {
+     *       status        INTEGER,
+     *       statusString  PKIFreeText OPTIONAL,
+     *       failInfo      PKIFailureInfo OPTIONAL
+     *   }
+     */
     if (ecmp_expect_tag(view, &len,
                         MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE) != 0) {
         return ECMP_ERR_ASN1;
@@ -1282,6 +1425,10 @@ static int ecmp_parse_general_info(ecmp_der_view *view, int *implicit_confirm)
     size_t len;
     mbedtls_asn1_buf oid;
 
+    /*
+     * generalInfo [8] is a SEQUENCE OF InfoTypeAndValue. For this minimal
+     * client we only inspect id-it-implicitConfirm.
+     */
     if (ecmp_expect_tag(view, &len,
                         MBEDTLS_ASN1_CONTEXT_SPECIFIC |
                         MBEDTLS_ASN1_CONSTRUCTED | 8) != 0) {
@@ -1341,6 +1488,11 @@ static int ecmp_parse_pkiheader(const unsigned char **p, const unsigned char *en
     int pvno;
     int ret;
 
+    /*
+     * Parse the PKIHeader fields that matter for interoperability and session
+     * validation. expected_request is the locally stored state from the
+     * previous outbound message and is used to check transaction continuity.
+     */
     view.p = *p;
     view.end = end;
     ret = ecmp_expect_tag(&view, &len,
@@ -1430,6 +1582,7 @@ static int ecmp_parse_pkiheader(const unsigned char **p, const unsigned char *en
                     if (ecmp_expect_tag(&field, &len, MBEDTLS_ASN1_OCTET_STRING) != 0) {
                         return ECMP_ERR_ASN1;
                     }
+                    /* transactionID must stay stable across request/response pairs. */
                     if (expected_request != NULL) {
                         if (expected_request->transaction_id.len != len ||
                             memcmp(expected_request->transaction_id.data, field.p, len) != 0) {
@@ -1472,6 +1625,7 @@ static int ecmp_parse_pkiheader(const unsigned char **p, const unsigned char *en
                     if (ecmp_expect_tag(&field, &len, MBEDTLS_ASN1_OCTET_STRING) != 0) {
                         return ECMP_ERR_ASN1;
                     }
+                    /* senderNonce from our request must reappear as recipNonce in the response path. */
                     if (expected_request != NULL) {
                         if (expected_request->sender_nonce.len != len ||
                             memcmp(expected_request->sender_nonce.data, field.p, len) != 0) {
@@ -1511,6 +1665,12 @@ static int ecmp_verify_signature_protection(const ecmp_crypto_provider *crypto,
     int saw_candidate = 0;
     int saw_kid_match = 0;
 
+    /*
+     * For signed responses, CMP can carry the signer certificate chain in
+     * extraCerts [1]. This function iterates over those certificates and asks
+     * the crypto backend to verify the ProtectedPart signature with the first
+     * matching signer candidate.
+     */
     if (crypto == NULL || parsed == NULL || protected_part == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -1534,6 +1694,7 @@ static int ecmp_verify_signature_protection(const ecmp_crypto_provider *crypto,
     }
     certs.end = certs.p + certs_len;
 
+    /* Iterate over extraCerts and pick the signer that matches senderKID, if present. */
     while (certs.p < certs.end) {
         const unsigned char *cert_start = certs.p;
         size_t cert_len;
@@ -1564,6 +1725,7 @@ static int ecmp_verify_signature_protection(const ecmp_crypto_provider *crypto,
         }
 
         saw_candidate = 1;
+        /* The signer cert is embedded as full DER, so verification can stay backend-specific. */
         ret = crypto->verify_signature_from_cert(
             crypto->ctx, cert_start, (size_t) (certs.p + cert_len - cert_start),
             parsed->protection_alg_oid.data, parsed->protection_alg_oid.len,
@@ -1603,6 +1765,19 @@ static int ecmp_parse_certified_key_pair(ecmp_der_view *view,
     size_t len;
     const unsigned char *cert_start;
 
+    /*
+     * In the successful IP path, the issued certificate is carried as:
+     *
+     *   CertRepMessage
+     *     -> response
+     *       -> CertResponse
+     *         -> certifiedKeyPair
+     *           -> certOrEncCert [0]
+     *             -> certificate (CMPCertificate / X.509 Certificate)
+     *
+     * eCMP currently extracts and stores the issued certificate DER and ignores
+     * the optional private key publication / publication info branches.
+     */
     if (ecmp_expect_tag(view, &len,
                         MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE) != 0) {
         return ECMP_ERR_ASN1;
@@ -1641,6 +1816,14 @@ static int ecmp_parse_ip_body(ecmp_der_view *body_view, ecmp_message_state *pars
     int cert_req_id;
     int ret;
 
+    /*
+     * Parse:
+     *
+     *   PKIBody ::= CHOICE { ip [1] CertRepMessage, ... }
+     *
+     * For the current minimal flow we expect certReqId == 0 and read the
+     * resulting PKIStatusInfo plus the issued certificate on success.
+     */
     if (ecmp_expect_tag(body_view, &len,
                         MBEDTLS_ASN1_CONTEXT_SPECIFIC |
                         MBEDTLS_ASN1_CONSTRUCTED | ECMP_CMP_BODY_IP) != 0) {
@@ -1708,6 +1891,14 @@ static int ecmp_parse_error_body(ecmp_der_view *body_view, ecmp_message_state *p
     int error_code;
     int ret;
 
+    /*
+     * Parse:
+     *
+     *   PKIBody ::= CHOICE { error [23] ErrorMsgContent, ... }
+     *
+     * We retain both PKIStatusInfo and optional errorDetails text to make
+     * server-side rejections easier to diagnose.
+     */
     if (ecmp_expect_tag(body_view, &len,
                         MBEDTLS_ASN1_CONTEXT_SPECIFIC |
                         MBEDTLS_ASN1_CONSTRUCTED | ECMP_CMP_BODY_ERROR) != 0) {
@@ -1778,6 +1969,7 @@ static int ecmp_parse_pkiconf_body(ecmp_der_view *body_view)
     size_t len;
     ecmp_der_view conf;
 
+    /* pkiConf [19] is encoded as NULL and completes the minimal ir/ip/certConf flow. */
     if (ecmp_expect_tag(body_view, &len,
                         MBEDTLS_ASN1_CONTEXT_SPECIFIC |
                         MBEDTLS_ASN1_CONSTRUCTED | ECMP_CMP_BODY_PKICONF) != 0) {
@@ -1812,6 +2004,19 @@ int ecmp_cmp_parse_message(const ecmp_crypto_provider *crypto,
     int ret;
     int body_tag;
 
+    /*
+     * Parse the outer PKIMessage and then validate its protection:
+     *
+     *   PKIMessage ::= SEQUENCE {
+     *       header,
+     *       body,
+     *       protection [0] OPTIONAL,
+     *       extraCerts [1] OPTIONAL
+     *   }
+     *
+     * The function first decodes header/body, then reconstructs the
+     * ProtectedPart and checks PBM or signature-based protection against it.
+     */
     if (crypto == NULL || message == NULL || parsed == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -1838,6 +2043,7 @@ int ecmp_cmp_parse_message(const ecmp_crypto_provider *crypto,
 
     body_view.p = view.p;
     body_view.end = view.end;
+    /* PKIBody is a context-specific CHOICE, so the low tag number identifies the message type. */
     body_tag = body_view.p[0] & 0x1F;
     parsed->body_type = body_tag;
     if (body_tag == ECMP_CMP_BODY_IP) {
@@ -1899,6 +2105,11 @@ int ecmp_cmp_parse_message(const ecmp_crypto_provider *crypto,
         }
     }
 
+    /*
+     * Reconstruct the exact ProtectedPart from the parsed header and body
+     * bytes. This must match the sender's DER encoding or PBM/signature
+     * verification will fail.
+     */
     ret = ecmp_build_protected_part(protected_part_start,
                                     (size_t) (body_view.p - protected_part_start),
                                     protection_wrapper, (size_t) 0,
