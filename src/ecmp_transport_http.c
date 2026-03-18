@@ -1,3 +1,4 @@
+/* NOLINTNEXTLINE(bugprone-reserved-identifier) */
 #define _POSIX_C_SOURCE 200809L
 
 #include "ecmp/ecmp_transport.h"

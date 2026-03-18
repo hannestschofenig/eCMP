@@ -193,6 +193,103 @@ This builds:
 - `libecmp.a`
 - `build/ecmp_client`
 
+## Static Analysis
+
+`eCMP` can be checked with both the GCC static analyzer and `clang-tidy`.
+
+### GCC Static Analyzer
+
+For a lightweight first pass, run:
+
+```bash
+gcc -std=c99 -pedantic -Wall -Wextra -fanalyzer -fsyntax-only \
+  -I./include \
+  -I./src \
+  -I./external/mbedtls/include \
+  -DMBEDTLS_CONFIG_FILE=\"$(pwd)/external/mbedtls/include/mbedtls/mbedtls_config.h\" \
+  src/ecmp_client.c src/ecmp_cmp.c src/ecmp_crypto_mbedtls.c \
+  src/ecmp_transport_http.c program/main.c
+```
+
+This is useful for catching straightforward issues such as:
+
+- missing cleanup on error paths
+- obvious leak paths
+- null dereferences
+- simple misuse of uninitialized values
+
+### clang-tidy
+
+The repository contains a local `.clang-tidy` file that keeps the useful
+`clang-analyzer-*` and `bugprone-*` checks enabled while filtering out the
+known high-volume noise from Mbed TLS ASN.1 helper macros.
+
+Run it from the `eCMP` repository root like this:
+
+```bash
+clang-tidy \
+  src/ecmp_client.c \
+  src/ecmp_cmp.c \
+  src/ecmp_crypto_mbedtls.c \
+  src/ecmp_transport_http.c \
+  program/main.c \
+  -header-filter='^.*/eCMP/(include|src|program)/.*' \
+  --extra-arg=-std=c99 \
+  --extra-arg=-I$(pwd)/include \
+  --extra-arg=-I$(pwd)/src \
+  --extra-arg=-I$(pwd)/external/mbedtls/include \
+  --extra-arg=-DMBEDTLS_CONFIG_FILE=\"$(pwd)/external/mbedtls/include/mbedtls/mbedtls_config.h\" \
+  --
+```
+
+If you are still working against an external Mbed TLS checkout instead of the
+submodule layout, replace:
+
+- `$(pwd)/external/mbedtls/include`
+
+with the actual include directory of that checkout.
+
+### Typical Session
+
+From the `eCMP` repository root:
+
+```bash
+git submodule update --init --recursive
+cd external/mbedtls
+git checkout mbedtls-3.6.4
+cd ../..
+cmake -S . -B build
+cmake --build build -j4
+```
+
+From the sibling `cmp-test-suite` checkout:
+
+```bash
+cd ../cmp-test-suite
+python3 -m venv venv-cmp-tests
+source venv-cmp-tests/bin/activate
+make start-mock-ca
+```
+
+Back in `eCMP`:
+
+```bash
+cd ../eCMP
+./build/ecmp_client -i \
+  --sender "CN=ecmp-dev-$(date +%s)" \
+  --subject "CN=ecmp-dev-$(date +%s)" \
+  --kid "ecmp-dev-$(date +%s)" \
+  --write-debug-meta
+```
+
+Useful artifacts to inspect after a run:
+
+- `out/last_request.der`
+- `out/last_response.der`
+- `out/last_response.meta.txt`
+- `out/new_cert.pem`
+- `out/new_key.pem`
+
 ## Running the Mock CA
 
 The intended test server is the Mock CA from `cmp-test-suite`.

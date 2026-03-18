@@ -921,14 +921,37 @@ int ecmp_cmp_build_ir(const ecmp_crypto_provider *crypto, const ecmp_key *key,
     prot_der = prot_buf + sizeof(prot_buf) - prot_len;
 
     total_len = 0;
-    ret = 0;
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, prot_der, prot_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, body_der, body_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, header_der, header_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_len(&p, buf, total_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_tag(&p, buf,
-                                                           MBEDTLS_ASN1_CONSTRUCTED |
-                                                           MBEDTLS_ASN1_SEQUENCE));
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, prot_der, prot_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, body_der, body_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, header_der, header_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_len(&p, buf, total_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_tag(&p, buf,
+                                 MBEDTLS_ASN1_CONSTRUCTED |
+                                 MBEDTLS_ASN1_SEQUENCE);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
 
     ret = ecmp_copy_and_wrap_output(buf, p, out, out_len);
     if (ret != 0) {
@@ -1082,14 +1105,37 @@ int ecmp_cmp_build_certconf(const ecmp_crypto_provider *crypto,
     prot_der = prot_buf + sizeof(prot_buf) - prot_len;
 
     total_len = 0;
-    ret = 0;
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, prot_der, prot_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, body_der, body_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_raw_buffer(&p, buf, header_der, header_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_len(&p, buf, total_len));
-    MBEDTLS_ASN1_CHK_ADD(total_len, mbedtls_asn1_write_tag(&p, buf,
-                                                           MBEDTLS_ASN1_CONSTRUCTED |
-                                                           MBEDTLS_ASN1_SEQUENCE));
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, prot_der, prot_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, body_der, body_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_raw_buffer(&p, buf, header_der, header_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_len(&p, buf, total_len);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
+
+    ret = mbedtls_asn1_write_tag(&p, buf,
+                                 MBEDTLS_ASN1_CONSTRUCTED |
+                                 MBEDTLS_ASN1_SEQUENCE);
+    if (ret < 0) {
+        goto cleanup;
+    }
+    total_len += (size_t) ret;
 
     ret = ecmp_copy_and_wrap_output(buf, p, out, out_len);
 

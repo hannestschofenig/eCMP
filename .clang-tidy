@@ -1,0 +1,9 @@
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-reserved-identifier
+HeaderFilterRegex: '^.*/eCMP/(include|src|program)/.*'
+FormatStyle: none
+SystemHeaders: false
