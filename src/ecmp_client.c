@@ -4,6 +4,19 @@
 #include <string.h>
 #include <stdio.h>
 
+/*
+ * This file provides the high-level client orchestration around the lower CMP,
+ * crypto, and transport layers.
+ *
+ * The main flow implemented here is:
+ *   1. generate a fresh enrollment key pair
+ *   2. build and send ir
+ *   3. parse and validate ip or error
+ *   4. on success, build and send certConf
+ *   5. parse and validate the final pkiConf
+ *   6. return the generated artifacts plus selected CMP metadata
+ */
+
 static int ecmp_is_known_error(int code)
 {
     switch (code) {
@@ -169,6 +182,7 @@ int ecmp_cmp_failinfo_to_string(unsigned int fail_info, char *buf, unsigned long
 
 static int ecmp_normalize_error(int code, int fallback)
 {
+    /* Preserve backend-specific symbolic errors where possible instead of collapsing them. */
     return ecmp_is_known_error(code) ? code : fallback;
 }
 
@@ -342,6 +356,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
     memset(&response_state, 0, sizeof(response_state));
     ecmp_zero_result(result);
 
+    /* Generate the new key pair up front so IR can carry the public key and POP. */
     ret = crypto->generate_ec_key(crypto->ctx, request->new_key_curve, &new_key);
     if (ret != 0 || new_key == NULL) {
         ret = ret != 0 ? ecmp_normalize_error(ret, ECMP_ERR_CRYPTO) : ECMP_ERR_CRYPTO;
@@ -354,6 +369,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         goto cleanup;
     }
 
+    /* Exchange the initial registration request and parse the returned ip or error body. */
     ret = transport->send_receive(transport->ctx, request_der, request_der_len,
                                   &response_der, &response_der_len);
     if (ret != 0) {
@@ -386,6 +402,10 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         response_der = NULL;
         response_der_len = 0;
 
+        /*
+         * If implicitConfirm was not granted, CMP requires an explicit certConf
+         * from the client before the exchange is complete.
+         */
         ret = ecmp_cmp_build_certconf(crypto, request, &response_state,
                                       &certconf_der, &certconf_der_len);
         if (ret != 0) {
@@ -398,6 +418,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         certconf_der = NULL;
         certconf_der_len = 0;
 
+        /* The second transport round trip carries certConf and should end with pkiConf. */
         ret = transport->send_receive(transport->ctx, request_der, request_der_len,
                                       &response_der, &response_der_len);
         if (ret != 0) {
@@ -413,6 +434,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         if (ret != 0) {
             goto cleanup;
         }
+        /* In the minimal happy path, certConf must be acknowledged with pkiConf. */
         if (request_state.body_type != ECMP_CMP_BODY_PKICONF) {
             ret = ECMP_ERR_PROTOCOL;
             goto cleanup;
@@ -452,6 +474,7 @@ int ecmp_initial_registration(const ecmp_crypto_provider *crypto,
         result->extra_certs_der_len = tmp.len;
     }
 
+    /* Export the generated key so callers can persist the enrolled key material. */
     ret = crypto->write_private_key_pem(crypto->ctx, new_key,
                                         &result->private_key_pem,
                                         &result->private_key_pem_len);

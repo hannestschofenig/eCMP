@@ -12,6 +12,18 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/*
+ * This file provides the current transport backend for eCMP.
+ *
+ * CMP itself is transport-agnostic. For now, eCMP uses the HTTP binding and
+ * sends DER-encoded PKIMessage objects with:
+ *
+ *   Content-Type: application/pkixcmp
+ *
+ * The rest of the client only sees the transport abstraction and hands over
+ * request/response byte strings.
+ */
+
 typedef struct ecmp_http_ctx {
     char *host;
     char *port;
@@ -48,6 +60,7 @@ static void ecmp_http_free_ctx(void *ctx)
 
 static int ecmp_http_write_all(int fd, const unsigned char *buf, size_t len)
 {
+    /* send() may complete partially, so loop until the complete HTTP fragment is written. */
     while (len > 0) {
         ssize_t written = send(fd, buf, len, 0);
         if (written < 0) {
@@ -79,6 +92,14 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
     const unsigned char *body;
     const unsigned char *hdr_end;
 
+    /*
+     * Minimal HTTP client for the CMP-over-HTTP binding:
+     *   1. resolve host/port
+     *   2. open a TCP connection
+     *   3. POST the DER PKIMessage
+     *   4. read the full HTTP response
+     *   5. return only the CMP payload body
+     */
     if (http == NULL || request == NULL || response == NULL || response_len == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -110,6 +131,7 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
         return ECMP_ERR_NETWORK;
     }
 
+    /* CMP payloads are carried verbatim as application/pkixcmp bodies. */
     snprintf(header, sizeof(header),
              "POST %s%s HTTP/1.1\r\n"
              "Host: %s\r\n"
@@ -184,6 +206,7 @@ static int ecmp_http_send_receive(void *ctx, const unsigned char *request,
     }
     body = hdr_end + 4;
 
+    /* Keep the transport strict: reject HTTP responses that are not labeled as CMP. */
     if (strstr((const char *) raw, "\r\nContent-Type: application/pkixcmp\r\n") == NULL &&
         strstr((const char *) raw, "\r\ncontent-type: application/pkixcmp\r\n") == NULL) {
         free(raw);
@@ -206,6 +229,7 @@ int ecmp_http_transport_init(ecmp_transport *transport, const char *host,
 {
     ecmp_http_ctx *ctx;
 
+    /* Install the HTTP vtable so the CMP layer can remain transport-neutral. */
     if (transport == NULL || host == NULL || port == NULL || path == NULL) {
         return ECMP_ERR_PARAM;
     }

@@ -18,9 +18,24 @@
 #include "mbedtls/x509.h"
 #include "mbedtls/x509_crt.h"
 
+/*
+ * This file is the Mbed TLS-backed crypto provider for eCMP.
+ *
+ * The CMP core in ecmp_cmp.c only knows about protocol concepts such as:
+ *   - Name
+ *   - SubjectPublicKeyInfo
+ *   - PBM
+ *   - Proof-of-Possession signatures
+ *   - signature verification using extraCerts
+ *
+ * This file maps those CMP-facing operations to concrete Mbed TLS APIs while
+ * keeping the protocol layer independent of Mbed TLS data structures.
+ */
+
 int mbedtls_x509_write_names(unsigned char **p, unsigned char *start,
                              mbedtls_asn1_named_data *first);
 
+/* eCMP currently stores generated enrollment keys as generic Mbed TLS PK contexts. */
 struct ecmp_key {
     mbedtls_pk_context pk;
 };
@@ -39,6 +54,7 @@ static int ecmp_mbedtls_md_info(ecmp_hash_alg alg,
         return ECMP_ERR_PARAM;
     }
 
+    /* CMP currently uses the provider through the ecmp_hash_alg abstraction only. */
     switch (alg) {
         case ECMP_HASH_SHA256:
             md_type = MBEDTLS_MD_SHA256;
@@ -83,6 +99,10 @@ static int ecmp_mbedtls_generate_ec_key(void *ctx, const char *curve_name, ecmp_
     ecmp_key *new_key;
     int ret;
 
+    /*
+     * The current IR implementation requests a fresh EC key pair for the new
+     * certificate and identifies the curve by its Mbed TLS curve name.
+     */
     if (curve_name == NULL || key == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -141,7 +161,11 @@ static int ecmp_mbedtls_name_to_der(void *ctx, const char *name,
         return ECMP_ERR_PARAM;
     }
 
-    /* Convert a DN string into the canonical DER Name representation CMP expects. */
+    /*
+     * CMP sender, recipient, and subject fields ultimately use the X.509 Name
+     * ASN.1 type. eCMP keeps them as DER-encoded Name values, so the crypto
+     * provider turns a user-facing DN string into DER here.
+     */
     ret = mbedtls_x509_string_to_names(&head, name);
     if (ret != 0) {
         return ret;
@@ -171,6 +195,10 @@ static int ecmp_mbedtls_export_spki_der(void *ctx, const ecmp_key *key,
     int len;
     (void) ctx;
 
+    /*
+     * CertTemplate.publicKey expects a DER SubjectPublicKeyInfo structure.
+     * Mbed TLS already emits that exact structure via pk_write_pubkey_der().
+     */
     if (key == NULL || out == NULL || out_len == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -207,7 +235,11 @@ static int ecmp_mbedtls_sign(void *ctx, const ecmp_key *key, ecmp_hash_alg hash_
         return ECMP_ERR_UNSUPPORTED;
     }
 
-    /* Mbed TLS sign APIs operate on the message digest, not on the raw ProtectedPart bytes. */
+    /*
+     * CMP POP and signature-based protection are specified over ASN.1 objects,
+     * but the Mbed TLS signing API consumes a precomputed digest plus the
+     * requested hash identifier.
+     */
     ret = mbedtls_md(md_info, input, input_len, hash);
     if (ret != 0) {
         return ret;
@@ -279,6 +311,7 @@ static int ecmp_mbedtls_hmac(void *ctx, ecmp_hash_alg hash_alg,
     int ret;
     (void) ctx;
 
+    /* Used by the CMP layer to implement PBM after the base key derivation step. */
     if (key == NULL || input == NULL || mac == NULL || mac_len == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -314,6 +347,12 @@ static int ecmp_mbedtls_certificate_matches_subject_key_id(void *ctx,
     int ret;
     (void) ctx;
 
+    /*
+     * Signed CMP responses may identify the signer via PKIHeader.senderKID.
+     * This helper compares that value to the certificate's Subject Key
+     * Identifier so the protocol layer can pick the right signer from
+     * extraCerts without understanding X.509 internals.
+     */
     if (cert_der == NULL || key_id == NULL || match == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -356,6 +395,17 @@ static int ecmp_mbedtls_verify_signature_from_cert(void *ctx,
     int ret;
     (void) ctx;
 
+    /*
+     * For signature-protected CMP responses, the protocol layer passes:
+     *   - the signer's certificate from extraCerts
+     *   - the protectionAlg OID from PKIHeader
+     *   - the DER-encoded ProtectedPart
+     *   - the BIT STRING contents from PKIProtection
+     *
+     * This helper translates the OID into the Mbed TLS hash/signature view,
+     * hashes the ProtectedPart, and verifies the signature with the public key
+     * from the provided certificate.
+     */
     if (cert_der == NULL || sig_alg_oid == NULL || input == NULL ||
         sig == NULL || verified == NULL) {
         return ECMP_ERR_PARAM;
@@ -421,6 +471,7 @@ static int ecmp_mbedtls_write_private_key_pem(void *ctx, const ecmp_key *key,
     int ret;
     (void) ctx;
 
+    /* CLI and tests write the generated enrollment key to PEM for inspection or reuse. */
     if (key == NULL || pem == NULL || pem_len == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -449,6 +500,7 @@ static int ecmp_mbedtls_der_to_pem(const char *header, const char *footer,
     size_t olen = 0;
     int ret;
 
+    /* Generic DER-to-PEM helper shared by certificate and extraCerts output. */
     buf = calloc(1, der_len * 3 + 128);
     if (buf == NULL) {
         return ECMP_ERR_ALLOC;
@@ -490,6 +542,11 @@ static int ecmp_mbedtls_write_certificate_sequence_pem(void *ctx,
     int ret;
     (void) ctx;
 
+    /*
+     * CMP extraCerts is a SEQUENCE OF certificates. This helper converts the
+     * DER sequence into concatenated PEM certificates so the output is usable
+     * with common command-line tooling.
+     */
     if (der == NULL || pem == NULL || pem_len == NULL) {
         return ECMP_ERR_PARAM;
     }
@@ -549,6 +606,11 @@ int ecmp_crypto_mbedtls_init(ecmp_crypto_provider *provider)
     ecmp_mbedtls_ctx *ctx;
     int ret;
 
+    /*
+     * Seed a provider-local DRBG once and then expose the operation table used
+     * by the CMP layer. After this point, the protocol code interacts only
+     * through function pointers, not through Mbed TLS types directly.
+     */
     if (provider == NULL) {
         return ECMP_ERR_PARAM;
     }
